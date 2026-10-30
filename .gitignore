@@ -1,0 +1,16 @@
+# Build artifacts
+/bin/
+/dist/
+
+# Test artifacts
+*.test
+coverage.out
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# Credentials. The token file is written to the data directory at run time
+# and never belongs in the repository.
+auth.json
+/data/

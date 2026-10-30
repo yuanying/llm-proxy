@@ -1,0 +1,9 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "The shared presets of yuanying/renovate-config hold the two-day wait, the ubuntu exception, the github-actions group, and the merge of patch, digest and pinning updates once the pull request's checks pass. CI runs on every pull request, with no paths filter, so every branch Renovate opens is tested before it is merged. What is merged this way reaches a release on its own through the weekly release",
+  "extends": [
+    "github>yuanying/renovate-config",
+    "github>yuanying/renovate-config:automerge-patch"
+  ],
+  "postUpdateOptions": ["gomodTidy"]
+}
