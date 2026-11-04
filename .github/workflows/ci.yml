@@ -5,8 +5,9 @@ name: CI
 on:
   push:
     branches: [main]
-  # No paths filter: Renovate merges a patch update once these checks pass,
-  # so every pull request has to be tested whatever it changes.
+  # No paths filter: GitHub merges a Renovate update once it is approved and
+  # these checks pass, so every pull request has to be tested whatever it
+  # changes.
   pull_request:
 
 # Deciding whether a pull request is good writes nothing. Work that writes
