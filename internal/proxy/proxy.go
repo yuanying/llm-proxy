@@ -1,9 +1,12 @@
 // Package proxy is the pass-through to the upstream Responses API (ADR 0001):
 // it checks gated's assertion, lets the listed routes through, puts the real
 // access token on the request and streams the answer back as it arrives.
+// The body of a Responses API request is the one thing it reads, to take out
+// what the subscription refuses (ADR 0006).
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -229,7 +232,45 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, reason, http.StatusServiceUnavailable)
 		return
 	}
+	if !h.adjustBody(rec, r, subject) {
+		return
+	}
 	h.proxy.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), tokenKey{}, token)))
+}
+
+// adjustBody takes out of a Responses API request what the subscription
+// refuses (ADR 0006), and logs the names of what it took out. Other routes
+// and compressed bodies pass unread. It returns false when it has answered
+// the request itself.
+func (h *handler) adjustBody(w http.ResponseWriter, r *http.Request, subject string) bool {
+	if r.Method != subscriptionRoute.Method || r.URL.Path != subscriptionRoute.Path {
+		return true
+	}
+	if enc := r.Header.Get("Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") {
+		return true
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxRequestBody+1))
+	if err != nil {
+		http.Error(w, "could not read the request body", http.StatusBadRequest)
+		return false
+	}
+	if len(body) > MaxRequestBody {
+		http.Error(w, "the request body is too large", http.StatusRequestEntityTooLarge)
+		return false
+	}
+	body, adj := adjustForSubscription(body)
+	if adj.changed() {
+		h.cfg.Logger.Info("took out what the subscription refuses",
+			"path", r.URL.Path,
+			"subject", subject,
+			"dropped_fields", adj.droppedFields,
+			"dropped_input_items", adj.droppedInputItems,
+			"moved_fields", adj.movedFields,
+		)
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	return true
 }
 
 // route returns 0 when the request's route is listed, or the status to

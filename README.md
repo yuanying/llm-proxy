@@ -2,7 +2,7 @@
 
 A pass-through proxy that serves one ChatGPT subscription to trusted callers on the OpenAI Responses API.
 
-One process holds the "Sign in with ChatGPT" token and refreshes it. Callers send ordinary Responses API requests to the proxy; the proxy swaps their `Authorization` for the real access token and forwards the request to `https://api.openai.com/v1` unchanged. Streams are passed through as they arrive. Nothing in the request or response body is read or rewritten, so reasoning items and prompt cache keys sent by the caller reach the API.
+One process holds the "Sign in with ChatGPT" token and refreshes it. Callers send ordinary Responses API requests to the proxy; the proxy swaps their `Authorization` for the real access token and forwards the request to `https://api.openai.com/v1`. Streams are passed through as they arrive. The only body the proxy reads is that of `POST /v1/responses`, to take out the few fields and input items the subscription refuses (see below); everything else, including reasoning items and prompt cache keys, reaches the API as the caller wrote it. Response bodies are never read.
 
 The proxy is meant to sit behind [gated](https://github.com/yuanying/gated), which authenticates callers (for example by their Kubernetes ServiceAccount token) and tells the proxy who they are with a signed `Gated-Assertion` header. The proxy checks that assertion on every request, so requests that reach it without going through gated are refused.
 
@@ -14,6 +14,8 @@ Design decisions are in [`docs/adr/`](docs/adr/).
 |---|---|
 | Routes | `POST /v1/responses` and `GET /v1/models` by default (exact paths). Other paths get 404, other methods 405 |
 | Request headers changed | `Authorization` is replaced with the real token. `Cookie`, `Gated-*`, `Forwarded`, `X-Forwarded-*`, `X-Real-IP` and hop-by-hop headers are dropped. Everything else passes |
+| `POST /v1/responses` body | Read in full (up to 64 MiB; larger gets 413) and sent with the parts the subscription refuses taken out: the `configuration_update` input items and the top-level `prompt_cache_retention`, `prompt_cache_options`, `max_output_tokens` and `temperature`. When a `configuration_update` carried `reasoning.effort`, the last one's effort becomes the request's `reasoning.effort`. Everything else is kept, and a body with nothing to take out is sent byte for byte. A body that is not one JSON object, or that has a `Content-Encoding`, is sent as it is |
+| Other request bodies | Streamed through unread |
 | Response | Passed back as it is, status, headers and body, compressed or not. Every write is flushed at once |
 | Refusals | 401 without a valid assertion, 403 for a subject not allowed, 503 when there is no usable token, 502 when the upstream does not answer |
 | `GET /healthz` | 200, without an assertion or a token |
@@ -43,7 +45,7 @@ Every flag can also be set with an environment variable: `LLM_PROXY_` followed b
 
 Without a token file the proxy starts and answers 503 until a login writes one. The token is refreshed before requests and by a check every minute. A login written while the proxy runs is picked up without a restart.
 
-Logs are JSON lines on standard error. Each request logs its method, path (without the query), status, duration and the subject from the assertion. Tokens, assertions, headers and bodies are never logged.
+Logs are JSON lines on standard error. Each request logs its method, path (without the query), status, duration and the subject from the assertion. A request the proxy took something out of logs one more line with its path, subject, and the names of what was changed: `dropped_fields`, `dropped_input_items` and `moved_fields`. Tokens, assertions, headers, bodies and the values of what was taken out are never logged.
 
 ### `login`
 
