@@ -44,3 +44,4 @@ token を持つ値の型は、文字列にしたときもログに渡したと�
 - [[0001-pass-through-proxy]] — Proxy が返すエラーの本文
 - [[0002-token-storage-and-refresh]] — refresh の失敗をどう知らせるか
 - [[0004-refusing-direct-access]] — アクセスログの主体
+- [[0006-dropping-what-the-subscription-refuses]] — 落とした欄と項目の名前を書く行
