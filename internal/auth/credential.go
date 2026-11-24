@@ -1,4 +1,4 @@
-// Package auth keeps the ChatGPT sign-in credential: the token file in the
+// Package auth keeps the subscription credential: the token file in the
 // data directory (ADR 0002) and the source that refreshes it before it
 // expires.
 package auth
@@ -8,6 +8,10 @@ import (
 	"log/slog"
 	"time"
 )
+
+// ProviderXAI marks a credential issued by xAI. Legacy OpenAI credentials
+// have no provider marker.
+const ProviderXAI = "xai"
 
 // Credential is the OAuth grant for the subscription. It prints, logs and
 // marshals with its tokens left out (ADR 0005); the token file is written
@@ -20,6 +24,7 @@ type Credential struct {
 	// ClientID is the client issued at login, which refreshing needs.
 	ClientID string
 	Scopes   []string
+	Provider string
 }
 
 func (c Credential) redacted() string {

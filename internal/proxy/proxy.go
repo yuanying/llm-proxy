@@ -1,8 +1,8 @@
 // Package proxy is the pass-through to the upstream Responses API (ADR 0001):
 // it checks gated's assertion, lets the listed routes through, puts the real
 // access token on the request and streams the answer back as it arrives.
-// The body of a Responses API request is the one thing it reads, to take out
-// what the subscription refuses (ADR 0006).
+// In OpenAI mode it reads Responses API request bodies to take out what
+// the subscription refuses (ADR 0006).
 package proxy
 
 import (
@@ -84,6 +84,8 @@ type Config struct {
 	// HeaderTimeout is how long the upstream may take to send the response
 	// headers. The body is not limited: a stream lasts as long as the turn.
 	HeaderTimeout time.Duration
+	// PassThroughResponses disables the ChatGPT-specific request body adjustment.
+	PassThroughResponses bool
 	// Transport overrides the transport to the upstream, for tests.
 	Transport http.RoundTripper
 }
@@ -232,7 +234,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, reason, http.StatusServiceUnavailable)
 		return
 	}
-	if !h.adjustBody(rec, r, subject) {
+	if !h.cfg.PassThroughResponses && !h.adjustBody(rec, r, subject) {
 		return
 	}
 	h.proxy.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), tokenKey{}, token)))

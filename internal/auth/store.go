@@ -41,6 +41,7 @@ type fileFormat struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 	ClientID     string    `json:"client_id"`
 	Scopes       []string  `json:"scopes"`
+	Provider     string    `json:"provider,omitempty"`
 }
 
 // Load reads the token file. It returns an error matching fs.ErrNotExist when

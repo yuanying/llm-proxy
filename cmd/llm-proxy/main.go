@@ -1,8 +1,8 @@
-// Command llm-proxy serves one ChatGPT subscription to trusted callers on the
-// OpenAI Responses API.
+// Command llm-proxy serves one ChatGPT or xAI subscription to trusted callers
+// on the Responses API.
 //
 //	llm-proxy serve    run the proxy
-//	llm-proxy login    sign in with ChatGPT and write the token file
+//	llm-proxy login    sign in and write the token file
 //	llm-proxy version  print the version
 //
 // Every flag can also be set by an environment variable: LLM_PROXY_ followed
@@ -39,7 +39,7 @@ const usage = `usage: llm-proxy <command> [flags]
 
 commands:
   serve    run the proxy
-  login    sign in with ChatGPT and write the token file
+  login    sign in and write the token file
   version  print the version
 
 Run "llm-proxy <command> -h" for the flags of a command.
@@ -115,7 +115,21 @@ func splitList(s string) []string {
 	return out
 }
 
+const providerOpenAI = "openai"
+
+func providerFlag(fs *flag.FlagSet) *string {
+	return fs.String("provider", providerOpenAI, "subscription provider: openai or xai")
+}
+
+func validateProvider(provider string) error {
+	if provider != providerOpenAI && provider != auth.ProviderXAI {
+		return errors.New("--provider must be openai or xai")
+	}
+	return nil
+}
+
 type serveConfig struct {
+	provider        string
 	listen          string
 	dataDir         string
 	upstream        *url.URL
@@ -132,13 +146,18 @@ type serveConfig struct {
 
 func parseServe(args []string, getenv func(string) string) (serveConfig, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	provider := providerFlag(fs)
 	listen := fs.String("listen", ":8080", "address to listen on")
 	dataDir := fs.String("data-dir", "", "directory holding the token file (required)")
-	upstream := fs.String("upstream", "https://api.openai.com/v1", "upstream URL that stands for /v1")
+	var upstream *string
+	fs.Func("upstream", "upstream URL that stands for /v1 (default https://api.openai.com/v1 or https://api.x.ai/v1)", func(value string) error {
+		upstream = &value
+		return nil
+	})
 	routes := fs.String("routes", proxy.DefaultRoutes, `comma-separated "METHOD /v1/path" entries that pass`)
 	headerTimeout := fs.Duration("upstream-header-timeout", 10*time.Minute, "how long the upstream may take to send the response headers")
 	refreshBefore := fs.Duration("refresh-before", 10*time.Minute, "how long before expiry the access token is refreshed")
-	oauthIssuer := fs.String("oauth-issuer", oauth.DefaultIssuer, "origin of the OAuth token endpoint")
+	oauthIssuer := fs.String("oauth-issuer", "", "origin of the OAuth token endpoint (default depends on provider)")
 	issuer := fs.String("gated-issuer", "", "gated's central authentication host, as an https origin")
 	jwksURL := fs.String("gated-jwks-url", "", "where gated publishes its keys (default <gated-issuer>/__gated/jwks.json)")
 	audience := fs.String("gated-audience", "", "this proxy's public host name, as gated puts it in the assertion's aud")
@@ -148,7 +167,11 @@ func parseServe(args []string, getenv func(string) string) (serveConfig, error) 
 		return serveConfig{}, err
 	}
 
+	if err := validateProvider(*provider); err != nil {
+		return serveConfig{}, err
+	}
 	cfg := serveConfig{
+		provider:        *provider,
 		listen:          *listen,
 		dataDir:         *dataDir,
 		headerTimeout:   *headerTimeout,
@@ -163,9 +186,15 @@ func parseServe(args []string, getenv func(string) string) (serveConfig, error) 
 	if cfg.dataDir == "" {
 		return serveConfig{}, errors.New("--data-dir is required")
 	}
-	u, err := url.Parse(*upstream)
+	upstreamURL := oauth.Resource
+	if upstream != nil {
+		upstreamURL = *upstream
+	} else if cfg.provider == auth.ProviderXAI {
+		upstreamURL = "https://api.x.ai/v1"
+	}
+	u, err := url.Parse(upstreamURL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return serveConfig{}, fmt.Errorf("--upstream %q is not an http(s) URL", *upstream)
+		return serveConfig{}, fmt.Errorf("--upstream %q is not an http(s) URL", upstreamURL)
 	}
 	cfg.upstream = u
 	if cfg.routes, err = proxy.ParseRoutes(*routes); err != nil {
@@ -191,6 +220,34 @@ func parseServe(args []string, getenv func(string) string) (serveConfig, error) 
 	return cfg, nil
 }
 
+func newTokenSource(cfg serveConfig, store *auth.FileStore, logger *slog.Logger) *auth.Source {
+	var refresher auth.Refresher = &oauth.Client{Issuer: cfg.oauthIssuer}
+	var provider string // legacy OpenAI credentials have no provider marker
+	if cfg.provider == auth.ProviderXAI {
+		refresher = &oauth.XAIClient{Issuer: cfg.oauthIssuer}
+		provider = auth.ProviderXAI
+	}
+	return auth.NewSource(auth.SourceConfig{
+		Store:         store,
+		Refresher:     refresher,
+		Provider:      provider,
+		RefreshBefore: cfg.refreshBefore,
+		Logger:        logger,
+	})
+}
+
+func newHandler(cfg serveConfig, tokens *auth.Source, verifier proxy.Verifier, logger *slog.Logger) (http.Handler, error) {
+	return proxy.New(proxy.Config{
+		Upstream:             cfg.upstream,
+		Routes:               cfg.routes,
+		Tokens:               tokens,
+		Verifier:             verifier,
+		Logger:               logger,
+		HeaderTimeout:        cfg.headerTimeout,
+		PassThroughResponses: cfg.provider == auth.ProviderXAI,
+	})
+}
+
 func serve(ctx context.Context, cfg serveConfig, logger *slog.Logger) error {
 	unlock, err := auth.LockDir(cfg.dataDir)
 	if err != nil {
@@ -199,12 +256,7 @@ func serve(ctx context.Context, cfg serveConfig, logger *slog.Logger) error {
 	defer unlock()
 
 	store := auth.NewFileStore(cfg.dataDir)
-	tokens := auth.NewSource(auth.SourceConfig{
-		Store:         store,
-		Refresher:     &oauth.Client{Issuer: cfg.oauthIssuer},
-		RefreshBefore: cfg.refreshBefore,
-		Logger:        logger,
-	})
+	tokens := newTokenSource(cfg, store, logger)
 	if _, _, err := store.Load(); errors.Is(err, os.ErrNotExist) {
 		logger.Warn("no token file yet; requests get 503 until `llm-proxy login` writes one", "path", store.Path())
 	}
@@ -223,14 +275,7 @@ func serve(ctx context.Context, cfg serveConfig, logger *slog.Logger) error {
 		})
 	}
 
-	handler, err := proxy.New(proxy.Config{
-		Upstream:      cfg.upstream,
-		Routes:        cfg.routes,
-		Tokens:        tokens,
-		Verifier:      verifier,
-		Logger:        logger,
-		HeaderTimeout: cfg.headerTimeout,
-	})
+	handler, err := newHandler(cfg, tokens, verifier, logger)
 	if err != nil {
 		return err
 	}
@@ -260,8 +305,10 @@ func serve(ctx context.Context, cfg serveConfig, logger *slog.Logger) error {
 }
 
 type loginConfig struct {
+	provider       string
 	dataDir        string
 	oauthIssuer    string
+	xaiClientID    string
 	agentName      string
 	callbackListen string
 	timeout        time.Duration
@@ -269,8 +316,10 @@ type loginConfig struct {
 
 func parseLogin(args []string, getenv func(string) string) (loginConfig, error) {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
+	provider := providerFlag(fs)
 	dataDir := fs.String("data-dir", "", "directory holding the token file (required)")
-	oauthIssuer := fs.String("oauth-issuer", oauth.DefaultIssuer, "origin of the OAuth endpoints")
+	oauthIssuer := fs.String("oauth-issuer", "", "origin of the OAuth endpoints (default depends on provider)")
+	xaiClientID := fs.String("xai-client-id", oauth.DefaultXAIClientID, "public OAuth client ID for xAI login")
 	agentName := fs.String("agent-name", "llm-proxy", "name the login introduces itself with")
 	callbackListen := fs.String("callback-listen", "127.0.0.1:1455", "where to listen for the browser's callback; empty to only take a pasted URL")
 	timeout := fs.Duration("timeout", 10*time.Minute, "how long to wait for the login")
@@ -280,9 +329,17 @@ func parseLogin(args []string, getenv func(string) string) (loginConfig, error) 
 	if *dataDir == "" {
 		return loginConfig{}, errors.New("--data-dir is required")
 	}
+	if err := validateProvider(*provider); err != nil {
+		return loginConfig{}, err
+	}
+	if *provider == auth.ProviderXAI && strings.TrimSpace(*xaiClientID) == "" {
+		return loginConfig{}, errors.New("--xai-client-id cannot be blank in xai mode")
+	}
 	return loginConfig{
+		provider:       *provider,
 		dataDir:        *dataDir,
 		oauthIssuer:    *oauthIssuer,
+		xaiClientID:    *xaiClientID,
 		agentName:      *agentName,
 		callbackListen: *callbackListen,
 		timeout:        *timeout,
@@ -292,9 +349,13 @@ func parseLogin(args []string, getenv func(string) string) (loginConfig, error) 
 func runLogin(ctx context.Context, cfg loginConfig, stdin io.Reader, stdout io.Writer) error {
 	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
 	defer cancel()
+	store := auth.NewFileStore(cfg.dataDir)
+	if cfg.provider == auth.ProviderXAI {
+		return login.RunXAI(ctx, &oauth.XAIClient{Issuer: cfg.oauthIssuer}, cfg.xaiClientID, store, stdout)
+	}
 	flow := &login.Flow{
 		OAuth:        &oauth.Client{Issuer: cfg.oauthIssuer},
-		Store:        auth.NewFileStore(cfg.dataDir),
+		Store:        store,
 		AgentName:    cfg.agentName,
 		CallbackAddr: cfg.callbackListen,
 		In:           stdin,
