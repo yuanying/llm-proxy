@@ -41,7 +41,7 @@ llm-proxy は、受け取った要求を上流の Responses API へ転送し、�
 
 サブスクリプションの token で何ができるかは OpenAI の側が決めるが、それを広く通す理由はこちらには無い。エージェントがモデルと話すのに要るのは応答の生成と、モデルの一覧くらいである。ファイルのアップロードや、保存した応答の取り出し・削除などは、要るとわかったときに一覧へ足す。
 
-上流の URL は設定で変えられ、既定は `https://api.openai.com/v1` である。要求のパスの `/v1` より後ろを、上流の URL のパスの後ろにつなげる。クエリ文字列はそのまま送る。
+上流の URL は設定で変えられ、OpenAI モードでの既定は `https://api.openai.com/v1` である。xAI モードの既定は ADR-0007 で定める。要求のパスの `/v1` より後ろを、上流の URL のパスの後ろにつなげる。クエリ文字列はそのまま送る。
 
 ### ストリームは届いたそばから流す
 
@@ -84,4 +84,5 @@ Proxy が自分で返すエラーの本文は短い文だけで、token・アサ
 - [[0002-token-storage-and-refresh]] — 付け替える token をどこに持ち、いつ refresh するか
 - [[0004-refusing-direct-access]] — `Gated-` のヘッダと、手前の認証
 - [[0005-keeping-secrets-out-of-logs]] — エラーの本文とログに出さないもの
-- [[0006-dropping-what-the-subscription-refuses]] — 本文に触れない決定のうち、応答の生成の要求の本文の部分を置き換える
+- [[0006-dropping-what-the-subscription-refuses]] — 本文に触れない決定のうち、OpenAI モードでの応答の生成の要求の本文の部分を置き換える
+- [[0007-xai-subscription-upstream]] — この転送方針を共用する xAI モードを足す
