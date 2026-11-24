@@ -19,7 +19,7 @@ pi-ai は、会話の途中で考える量（reasoning の effort）を変える
 
 ### 対象は `POST /v1/responses` の要求の本文だけ
 
-本文を読んで直すのは、`POST /v1/responses` の要求の本文だけである。ほかの route の要求、応答の本文とヘッダは、ADR-0001 のとおり読まずに流す。要求のヘッダの扱いも ADR-0001 のまま変えない。
+本文を読んで直すのは、OpenAI モードの `POST /v1/responses` の要求の本文だけである。xAI モードでは書き換えない（ADR-0007 の Decision 項 3（xAI への要求は本文を読まずに中継する））。ほかの route の要求、応答の本文とヘッダは、ADR-0001 のとおり読まずに流す。要求のヘッダの扱いも ADR-0001 のまま変えない。
 
 ### 知っているものだけを落とす
 
@@ -85,6 +85,7 @@ pi-ai は、会話の途中で考える量（reasoning の effort）を変える
 
 - [[0001-pass-through-proxy]] — 一部を置き換える。Decision 項 1（変えるのは資格情報だけ）の「本文には触れない。読みもしない」と、Decision 項 3（ストリームは届いたそばから流す）の要求の本文の部分を、`POST /v1/responses` の要求について置き換える
 - [[0005-keeping-secrets-out-of-logs]] — 落とした名前の行に値を書かない
+- [[0007-xai-subscription-upstream]] — 本 ADR の書き換えを適用しない xAI モードを足す
 
 ## References
 

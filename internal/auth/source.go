@@ -35,6 +35,8 @@ type Refresher interface {
 type SourceConfig struct {
 	Store     *FileStore
 	Refresher Refresher
+	// Provider is the required credential marker; empty for OpenAI.
+	Provider string
 	// RefreshBefore is how long before expiry the token is refreshed.
 	RefreshBefore time.Duration
 	Now           func() time.Time
@@ -46,6 +48,7 @@ type SourceConfig struct {
 type Source struct {
 	store         *FileStore
 	refresher     Refresher
+	provider      string
 	refreshBefore time.Duration
 	now           func() time.Time
 	log           *slog.Logger
@@ -64,6 +67,7 @@ func NewSource(cfg SourceConfig) *Source {
 	s := &Source{
 		store:         cfg.Store,
 		refresher:     cfg.Refresher,
+		provider:      cfg.Provider,
 		refreshBefore: cfg.RefreshBefore,
 		now:           cfg.Now,
 		log:           cfg.Logger,
@@ -134,7 +138,7 @@ func (s *Source) maintain(ctx context.Context) {
 }
 
 func (s *Source) reloadIfChanged() {
-	if s.cred != nil {
+	if s.version.info != nil {
 		changed, err := s.store.Changed(s.version)
 		if err != nil {
 			s.log.Error("checking the token file failed", "path", s.store.Path(), "error", err)
@@ -150,6 +154,11 @@ func (s *Source) reloadIfChanged() {
 	}
 	if err != nil {
 		s.log.Error("reading the token file failed", "path", s.store.Path(), "error", err)
+		return
+	}
+	if c.Provider != s.provider {
+		s.log.Error("the token file is for a different provider; run `llm-proxy login` with the same provider as `serve`", "path", s.store.Path())
+		s.cred, s.version, s.unsaved, s.lastFailure = nil, version, false, time.Time{}
 		return
 	}
 	if s.cred != nil {
